@@ -5,25 +5,29 @@ Pipeline {
         AWS_ACCESS_KEY_ID = credentials('aws-access-key')
         AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
         AWS_REGION = 'eu-north-1'
+        DOCKER_IMAGE = 'business-app'
+        IMAGE_REPOSITORY_NAME = 'docker-image-repo'
+        IMAGE_TAG = 'latest'
+        AWS_ACCOUNT_ID = credentials('aws-account-id')
     }
 
     stages {
         stage('Checkout') {
             steps {
                 git branch: 'main',
-                url: 
+                url: "https://github.com/Adeife79/development-stage.git"
             }
         }
 
         stage ('Create S3 Bucket') {
             environment {
-                BUCKET_NAME = ""
+                BUCKET_NAME = "demo2-terraform-state-bucket"
             }
 
             steps {
                 withCredentials([[
                     $class: 'AmazonWebServicesCredentialsBinding', 
-                    crdentialsId: ''
+                    credentialsId: 'demo2-aws-credentials'
                 ]]) {
                     sh '''
                         aws s3api create-bucket --bucket "$BUCKET_NAME" --region eu-north-1 --create-bucket-configuration LocationConstraint eu-north-1
@@ -35,7 +39,7 @@ Pipeline {
         stage ('Terraform Init') {
             steps {
                 dir('terraform-config') {
-                      sh 'terraform init -input=false'
+                      sh 'terraform init -input=false -backend-config="bucket=${BUCKET_NAME}"'
                 }
             }
         }
@@ -54,39 +58,23 @@ Pipeline {
             }
             steps {
                 dir ('terraform-config') {
-                    sh 'terraform apply -input=false tfplan'
+                    sh 'terraform apply -input=false -auto-approve tfplan'
                 }
             }
         }
 
-        stage ('Terraform Destroy') {
-            when {
-                expression {return params.DESTROY_INFRA == true}
-            }
+        stage ('Build and Push Docker Image to AWS ECR') {  
             steps {
-                dir ('terraform-config') {
-                    sh 'terraform destroy -auto-approve -input=false'
-                }
+                sh """
+                    aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin
+                    $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+                    docker build -t $DOCKER_IMAGE:$IMAGE_TAG .
+                    docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPOSITORY_NAME:$IMAGE_TAG  
+                """           
             }
         }
 
-        stage ('Build and Push Docker Image to ECR'){
-            steps {
-                script {
-                    def app = ''
-                    def ecr = aws ecr describe-repositories --repository-name "${app}" --region ${AWS_REGION} || aws ecr create-repository --repository-name "${app}" --region ${AWS_REG}
-                    def ecrUri = ecr.repository.repositoryUri
-
-                    sh '''
-                        docker compose up -d
-                        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-                        docker push $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$app
-                    '''
-                }
-            }
-        }
-
-        stage ('Run and Deploy DOcker Application via SSM') {
+        stage ('Run and Deploy Docker Application via SSM') {
             steps {
                 script {
                     env.EC2_PUBLIC_IP = sh (
@@ -106,21 +94,26 @@ Pipeline {
                         --instance-id $INSTANCE_ID \
                         --documnet-name "AWS-RunShellScript" \
                         --parameters 'commands=[
-                            "sudo systemctl start amazon-ssm-agent",
-                            "sudo systemctl enable amazon-ssm-agent",
+                            "AWS_REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPOSITORY_NAME",
+                            "DOCKER_IMAGE=$DOCKER_IMAGE:$IMAGE_TAG",
+                            "sudo systemctl start amazon-ssm-agent || true",
+                            "sudo systemctl enable amazon-ssm-agent || true",
                             "sudo dnf update -y >/dev/null 2>&1 || true",
                             "sudo systemctl daemon-reload || true",
-                            "sudo dnf install -y docker.io docker-compose  || true",
+                            "sudo dnf install -y docker || true",
+                            "sudo systemctl start docker || true",
+                            "sudo systemctl enable docker || true",
                             "curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" ",
-                            "unzip awscli2.zip",
+                            "unzip awscliv2.zip",
                             "sudo ./aws/install",
                             "aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com",
+                            "docker pull $AWS_REPOSITORY_URI:$IMAGE_TAG/$DOCKER_IMAGE:$IMAGE_TAG || docker run -d -p 8085:8085 $AWS_REPOSITORY_URI:$IMAGE_TAG/$DOCKER_IMAGE:$IMAGE_TAG || true"
                         ]' \
                     --region $AWS_REGION \
                     --query "Command.CommandId" \
                     --output text)
 
-            echo "Docker deployment command sent.Command ID: $COMMAND_ID"
+            echo "Docker application deployment command sent.Command ID: $COMMAND_ID"
             
 
             aws ssm wait command-executed \
