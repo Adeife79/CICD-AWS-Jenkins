@@ -63,18 +63,13 @@ pipeline {
 
         stage ('Build and Push Docker Image to AWS ECR') {  
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'demo2-aws-credentials'
-                ]]) {
-                    sh """
+                withCredentials([aws( credentialsId: 'demo2-aws-credentials', region: $AWS_REGION )]) {
+                    sh '''
                         aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
                         docker build -t $IMAGE_REPOSITORY_NAME:$IMAGE_TAG .
-                        docker tag $IMAGE_REPOSITORY_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPOSITORY_NAME:$IMAGE_TAG
                         docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPOSITORY_NAME:$IMAGE_TAG  
-                    """     
-                }
-                      
+                    '''     
+                }          
             }
         }
 
