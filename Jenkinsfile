@@ -6,9 +6,10 @@ pipeline {
         AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
         AWS_REGION = 'eu-north-1'
         DOCKER_IMAGE = 'business-app'
-        IMAGE_REPOSITORY_NAME = 'business-app-repo'
+        IMAGE_REPOSITORY_NAME = 'business-app'
         IMAGE_TAG = 'latest'
         AWS_ACCOUNT_ID = credentials('aws-account-id')
+        BUCKET_NAME = "demo2-terraform-state-bucket"
     }
 
     stages {
@@ -60,16 +61,26 @@ pipeline {
                 }
             }
         }
-
+        
+        stage ('Login to ECR'){
+            steps {
+                withCredentials([aws( credentialsId: 'demo2-aws-credentials')]) {
+                     sh '''
+                      aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+                     '''
+                }
+             }
+        }
+        
         stage ('Build and Push Docker Image to AWS ECR') {  
             steps {
-                withCredentials([aws( credentialsId: 'demo2-aws-credentials', region: $AWS_REGION )]) {
-                    sh '''
-                        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-                        docker build -t $IMAGE_REPOSITORY_NAME:$IMAGE_TAG .
-                        docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPOSITORY_NAME:$IMAGE_TAG  
-                    '''     
-                }          
+                dir ('business-app/backend'){
+                        sh '''
+                            docker build -t $IMAGE_REPOSITORY_NAME:$IMAGE_TAG .
+                            docker tag $IMAGE_REPOSITORY_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPOSITORY_NAME:$IMAGE_TAG
+                            docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPOSITORY_NAME:$IMAGE_TAG  
+                        '''     
+                }
             }
         }
 
@@ -91,7 +102,7 @@ pipeline {
 
                     COMMAND_ID=$(aws ssm send-command \
                         --instance-id $INSTANCE_ID \
-                        --documnet-name "AWS-RunShellScript" \
+                        --document-name "AWS-RunShellScript" \
                         --parameters 'commands=[
                             "AWS_REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPOSITORY_NAME",
                             "DOCKER_IMAGE=$DOCKER_IMAGE:$IMAGE_TAG",
@@ -105,8 +116,9 @@ pipeline {
                             "curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" ",
                             "unzip awscliv2.zip",
                             "sudo ./aws/install",
-                            "aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com",
-                            "docker pull $AWS_REPOSITORY_URI:$IMAGE_TAG/$DOCKER_IMAGE:$IMAGE_TAG || docker run -d -p 8085:8085 $AWS_REPOSITORY_URI:$IMAGE_TAG/$DOCKER_IMAGE:$IMAGE_TAG || true"
+                            "aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com",
+                            "docker pull $AWS_REPOSITORY_URI:$IMAGE_TAG",
+                            "docker run -d -p 8085:8085 $AWS_REPOSITORY_URI:$IMAGE_TAG || true"
                         ]' \
                     --region $AWS_REGION \
                     --query "Command.CommandId" \
