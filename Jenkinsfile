@@ -8,7 +8,7 @@ pipeline {
         DOCKER_IMAGE = 'business-app'
         IMAGE_REPOSITORY_NAME = 'business-app-repo'
         IMAGE_TAG = 'latest'
-        AWS_ACCOUNT_ID = credentials('aws-account-id')
+        AWS_ACCOUNT_ID = '749929394992'
         BUCKET_NAME = "demo2-terraform-state-bucket"
     }
 
@@ -82,8 +82,8 @@ pipeline {
             steps {
                 dir ('business-app/backend'){
                         sh '''
-                            docker build -t $DOCKER_IMAGE:$IMAGE_TAG .
-                            docker tag $DOCKER_IMAGE:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPOSITORY_NAME:$IMAGE_TAG
+                            docker build -t $DOCKER_IMAGE .
+                            docker tag $DOCKER_IMAGE $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPOSITORY_NAME:$IMAGE_TAG
                             docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$IMAGE_REPOSITORY_NAME:$IMAGE_TAG  
                         '''     
                 }
@@ -104,14 +104,22 @@ pipeline {
                 }
 
                 sh '''
+                    echo "AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID"
+                    echo "AWS_REGION=$AWS_REGION"
+                    echo "IMAGE_REPOSITORY_NAME=$IMAGE_REPOSITORY_NAME"
+                    echo "IMAGE_TAG=$IMAGE_TAG"
+                    echo "INSTANCE_ID=$INSTANCE_ID"
+                    echo "DOCKER_IMAGE=$DOCKER_IMAGE"
+                    
                     aws ec2 wait instance-running --instance-id $INSTANCE_ID --region $AWS_REGION
 
                     COMMAND_ID=$(aws ssm send-command \
                         --instance-id $INSTANCE_ID \
                         --document-name "AWS-RunShellScript" \
                         --parameters 'commands=[
-                            "AWS_REPOSITORY_URI=749929394992.dkr.ecr.eu-north-1.amazonaws.com/$IMAGE_REPOSITORY_NAME",
-                            "DOCKER_IMAGE=$DOCKER_IMAGE:$IMAGE_TAG",
+                            "AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID},
+                            "IMAGE_REPOSITORY_NAME=$IMAGE_REPOSITORY_NAME",
+                            "IMAGE_TAG=$IMAGE_TAG",
                             "sudo systemctl start amazon-ssm-agent || true",
                             "sudo systemctl enable amazon-ssm-agent || true",
                             "sudo dnf update -y >/dev/null 2>&1 || true",
@@ -119,11 +127,11 @@ pipeline {
                             "sudo dnf install -y docker || true",
                             "sudo systemctl start docker || true",
                             "sudo systemctl enable docker || true",
-                            "aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 749929394992.dkr.ecr.eu-north-1.amazonaws.com",
-                            "docker pull $AWS_REPOSITORY_URI:$IMAGE_TAG",
-                            "docker run -d -p 8085:8085 $AWS_REPOSITORY_URI:$IMAGE_TAG"
-                        ]' \
-                        --region $AWS_REGION \
+                            "aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com",
+                            "docker pull $AWS_ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com/$IMAGE_REPOSITORY_NAME:$IMAGE_TAG || true",
+                            "docker run -d -p 8085:8085 $AWS_ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com/$IMAGE_REPOSITORY_NAME:$IMAGE_TAG || true"
+                            ]' \
+                        --region eu-north-1 \
                         --query "Command.CommandId" \
                         --output text)
 
@@ -133,12 +141,12 @@ pipeline {
             aws ssm wait command-executed \
                 --command-id $COMMAND_ID \
                 --instance-id $INSTANCE_ID \
-                --region $AWS_REGION
+                --region eu-north-1
             
             aws ssm get-command-invocation \
                 --command-id $COMMAND_ID \
                 --instance-id $INSTANCE_ID \
-                --region $AWS_REGION
+                --region eu-north-1
             '''
 
             echo "Application successfully deployed!!"
