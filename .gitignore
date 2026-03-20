@@ -4,3 +4,5 @@ venv
 terraform.tfstate
 terrafform.tfstate.backup
 jenkinsfile
+terraform-config/compute.tf
+terraform-config/networking.tf
