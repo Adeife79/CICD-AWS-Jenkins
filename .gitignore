@@ -6,3 +6,4 @@ terrafform.tfstate.backup
 jenkinsfile
 terraform-config/compute.tf
 terraform-config/networking.tf
+terraform-config/output.tf
